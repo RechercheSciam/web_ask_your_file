@@ -1,4 +1,5 @@
 # Setting uo the environment
+#!pip3 install streamlit
 #!pip3 install langchain #==0.0.154
 #!pip3 install PyPDF2 #==3.0.1
 #!pip3 install faiss-cpu #==1.7.4
