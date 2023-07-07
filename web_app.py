@@ -48,7 +48,7 @@ from langchain.memory import ConversationBufferMemory
 load_dotenv()
 
 # Get OPENAI API key
-OPENAI_API_KEY = ""
+OPENAI_API_KEY = "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"
 
 #
 def read_file(file):
