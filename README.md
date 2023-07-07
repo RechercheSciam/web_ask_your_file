@@ -26,6 +26,8 @@ pip3 install python-pptx
 
 pip3 install python-docx
 
+pip3 install streamlit
+
 run web_app.py
 It will open your default browser.
 
