@@ -13,9 +13,11 @@
 #!pip3 install odfpy
 #!pip3 install python-pptx
 #!pip3 install python-docx
+#!pip3 install pinecone-client openai tiktoken
 
 
 import os, sys, io
+import getpass
 from dotenv import load_dotenv
 import streamlit as st
 import tempfile
@@ -31,165 +33,188 @@ from docx import Document
 from odf.opendocument import load
 from odf import teletype
 from odf import text as odf_text
-
-
 import fitz
 
 # Use langchain to use question answer based chaining
 from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains.question_answering import load_qa_chain
+from langchain.text_splitter import CharacterTextSplitter,RecursiveCharacterTextSplitter
 from langchain.llms import OpenAI
-from langchain.callbacks import get_openai_callback
+# Add memory
 from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from langchain.vectorstores import Pinecone
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
+
+from langchain import PromptTemplate
+from langchain.document_loaders import TextLoader, PyPDFLoader
+import json
+from langchain.document_loaders import PyPDFLoader, JSONLoader, UnstructuredHTMLLoader,UnstructuredExcelLoader
+from langchain.document_loaders import UnstructuredPowerPointLoader, Docx2txtLoader, UnstructuredODTLoader
+from langchain.document_loaders import UnstructuredURLLoader,WikipediaLoader
+from langchain.document_loaders.csv_loader import CSVLoader
+
+import pinecone
 
 
 load_dotenv()
 
-# Get OPENAI API key
-OPENAI_API_KEY = "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"
 
-#
+#Read the file 
 def read_file(file):
-  extension = file.name.split('.')[-1].lower()
-  text = " "
+	extension = file.split('.')[-1].lower()
 
-  # Read the file once and store the contents in a variable
-  #file = io.BytesIO(file.read())
+	# Read the file once and store the contents in a variable
+	# PDF
+	if extension == 'pdf':
+		print(f'Loading {file}')
+		loader = PyPDFLoader(file)
 
-  # PDF
-  if extension == 'pdf':
-    file = io.BytesIO(file.read())
-    file.seek(0)
-    doc = fitz.open("pdf",file.read())
-    for page in doc:
-        text += page.get_text()
+	# Word Document
+	elif extension == 'docx':
+		print(f'Loading {file}')
+		loader = Docx2txtLoader(file)
 
-  # Word Document
-  elif extension == 'docx':
-    file = io.BytesIO(file.read())
-    file.seek(0)
-    doc = docx.Document(file)
-    text = " "
-    for page in doc.paragraphs:
-        text += page.text
-  # CSV
-  elif extension == 'csv':
-    file = file.read().decode("utf-8")
-    read = pd.read_csv(io.StringIO(file))
-    text += " ".join(read.astype(str).values.flatten())
+	# CSV
+	elif extension == 'csv':
+		print(f'Loading {file}')
+		loader = CSVLoader(file)
 
-  # Excel
-  elif extension == 'xlsx':
-    doc = pd.read_csv(file)
-    text = doc.to_string(index=False, header=False)
+	# Excel
+	elif extension == 'xlsx':
+		print(f'Loading {file}')
+		loader = UnstructuredExcelLoader(file, mode="elements")
 
-  # Text
-  elif extension == 'txt':
-    text = file.read().decode('utf-8')
+	# Text
+	elif extension == 'odt':
+		print(f'Loading {file}')
+		loader = UnstructuredODTLoader(file, mode="elements")
 
-  # PowerPoint
-  elif extension == 'pptx':
-    doc = Presentation(io.BytesIO(file.read()))
+	# PowerPoint
+	elif extension == 'pptx':
+		print(f'Loading {file}')
+		loader = UnstructuredPowerPointLoader(file)
 
-    for slide in doc.slides:
-      for shape in slide.shapes:
-        if shape.has_text_frame:
-          for paragraph in shape.text_frame.paragraphs:
-            for run in paragraph.runs:
-              text += run.text + " "
+	# html
+	elif extension == 'html':
+		print(f'Loading {file}')
+		loader = UnstructuredHTMLLoader(file) #url
 
-  # Odt
-  elif extension == 'odt':
-    doc = load(file)
-    all_paragraphs = doc.getElementsByType(odf_text.P)
-    for paragraph in all_paragraphs:
-      text += teletype.extractText(paragraph)
+	# json
+	elif extension == 'json':
+		print(f'Loading {file}')
+		loader = json.loads(file.read_text()) #url
+	else:
+		print(f'The format file {file} is not supported.')
+		return None
 
-  else:
-    print(f'Document format {file} is not supported!')
-    return None
+	data = loader.load()
+	return data
 
-  return text
+# create chunks
+def chunk_data(data, chunk_size=512, chunk_overlap=50):
+	text_splitter = RecursiveCharacterTextSplitter(
+								chunk_size = chunk_size,
+								chunk_overlap = chunk_overlap,
+				)
+	chunks = text_splitter.split_documents(data)
+	return chunks
+
+# create embeddings
+def create_embeddings(chunks,index="pdfsciam"):
+	embeddings = OpenAIEmbeddings()
+	vectorstore = Pinecone.from_documents(chunks, embeddings, index_name=index)
+
+	return vectorstore
+
+
+# run chain
+def ask_with_memory(vectorstore, question, k=3, memory=[]):
+	docs = vectorstore.similarity_search(question,k=k)
+	llm = ChatOpenAI()
+	chain = ConversationalRetrievalChain.from_llm(llm,
+														retriever=vectorstore.as_retriever(),
+															)
+	
+	response = chain({"question": question, "chat_history":memory})
+	memory.append((question,response['answer']))
+	
+	return response, memory
+
+
+def clear_history():
+	if 'history' in st.session_state:
+		del st.session_state['history']
 
 
 def main():
-    st.set_page_config(page_title="Ask your file",
-                       page_icon="📚",
-                       initial_sidebar_state="auto",
-                       )
-    
-    st.header("Ask your file -- version: text Sciam --")
+		# Get OPENAI API key
+		OPENAI_API_KEY = ""
+		os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-    file_types = ["pdf","pptx","txt","csv","odt","xlsx","docx"]
+		#Pinecone api_key
+		PINECONE_API_KEY = ""
+		os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 
-    uploaded_file = st.file_uploader("Upload your file",type=file_types)
+		PINECONE_ENV = "eu-west1-gcp"
+		os.environ["PINECONE_ENV"]= PINECONE_ENV
 
-    hide_streamlit_style = """
-            <style>
-            
-            footer {visibility: hidden;}
-            </style>
-            """
-    st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
+		# initialize pinecone
+		pinecone.init(
+						 api_key=PINECONE_API_KEY,  # find at app.pinecone.io
+						 environment=PINECONE_ENV,  # next to api key in console
+						)
 
-    if uploaded_file is not None:
-        # Display file name
-        st.write(f"File uploaded: {uploaded_file.name}")
+		st.image('./logo1.png')
+		st.subheader('Ask your file.')
 
-        # Ensure the uploaded_file is at the start of the file
-        #uploaded_file.seek(0)
-        text = read_file(uploaded_file)
+		with st.sidebar:
+			uploaded_file = st.file_uploader('Upload a file: ', type=['pdf','docx','pptx','csv','odt','html','xlsx','json'])
+			chunk_size = st.number_input('Chunk size: ',min_value=100,max_value=2048,value=512,on_change=clear_history)
+			k = st.number_input('k',min_value=1, max_value=10,value=3,on_change=clear_history)
 
-        if text is None:
-          st.write("Failed to read file.")
-        else:
-          st.write(f'File sample {text[:200]}')
+			add_data = st.button('Add Data',on_click=clear_history)
 
-        # split into chunks
-        text_splitter = CharacterTextSplitter(
-                separator = "\n",
-                chunk_size = 1000,
-                chunk_overlap = 200,
-                length_function = len
-        )
-        
-        chunks = text_splitter.split_text(text)
+			if uploaded_file and add_data:
+				with st.spinner('reading, chunking and embedding file ...'):
+					bytes_data = uploaded_file.read()
+					file_name = os.path.join('./', uploaded_file.name)
 
-        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-        knowledge_base = FAISS.from_texts(chunks, embeddings)
+					with open(file_name, 'wb') as file:
+						file.write(bytes_data)
 
-        # User question
-        #user_question = st.tetx_input("Ask a question: ")
+					data = read_file(file_name)
+					chunks = chunk_data(data, chunk_size=chunk_size)
+					st.write(f'Chunk size: {chunk_size}, Chunks: {len(chunks)}')
 
-        user_input = st.text_area(
-                "Ask the document "
-            )
-        #Use bullet points and make it more user friendly read
-        prompt_engineering = """ Use the following format:\
-                    Format your response as paragraphs, use bullet points\
-                    Write in a concise, professional and unambigous tone.      
-        """
-        prompt = f""" {user_input}.
-                  '''{prompt_engineering}'''
-                  """
-        
-        if st.button("Generate Q&A"):
-          docs = knowledge_base.similarity_search(prompt)
-          llm = OpenAI(openai_api_key=OPENAI_API_KEY)
-           
-          chain = load_qa_chain(llm,
-                                chain_type="stuff"
-                              )
-           
-          response = chain.run(input_documents = docs, question = prompt)
-          st.markdown("### Generated Answer ")
-          st.write(response)
+					vectorstore = create_embeddings(chunks)
+
+					st.session_state.vs = vectorstore
+					st.success('File uploaded, chunked and embedded successfully.')
+		
+		q = st.text_input("Ask a question about the content of your file:")
+
+		if q:
+			if 'vs' in st.session_state:
+				vectorstore = st.session_state.vs
+				st.write(f'The number of most similar vector for answering the question: {k}')
+				response, memory = ask_with_memory(vectorstore,q,k)
+				st.text_area('LLL generated response: ',value=response["answer"])
+
+				st.divider()
+
+				if 'history' not in st.session_state:
+					st.session_state.history = ' '
+				value = f'Question: {q} \nAnswer: {response["answer"]}:'
+				st.session_state.history = f'{value} \n {"-"*100}\n{st.session_state.history}'
+				h = st.session_state.history
+				st.text_area(label='Chat History', value=h, key='history', height=400)
+					 	
 
 if __name__ == "__main__":
-   main()
-           
+	main()
+					 
 ######
 # SCIAM @08/2023
 
