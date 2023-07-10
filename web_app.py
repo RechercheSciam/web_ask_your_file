@@ -128,13 +128,17 @@ def create_embeddings(chunks,index="pdfsciam"):
 
 	return vectorstore
 
-
-# run chain
-def ask_with_memory(vectorstore, question, k=3, memory=[]):
+def create_llm_chain(vectorstore, question, k=3):
 	docs = vectorstore.similarity_search(question,k=k)
 	llm = ChatOpenAI()
-	chain = ConversationalRetrievalChain.from_llm(llm,
-														retriever=vectorstore.as_retriever(),
+
+	return llm
+
+# run chain
+def ask_with_memory(vectorstore, question, k, memory=[]):
+	chain = ConversationalRetrievalChain.from_llm(
+								llm=create_llm_chain(vectorstore, question, k),
+								retriever=vectorstore.as_retriever(),
 															)
 	
 	response = chain({"question": question, "chat_history":memory})
@@ -150,11 +154,11 @@ def clear_history():
 
 def main():
 		# Get OPENAI API key
-		OPENAI_API_KEY = ""
+		OPENAI_API_KEY = "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"
 		os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 		#Pinecone api_key
-		PINECONE_API_KEY = ""
+		PINECONE_API_KEY = "8f50afcb-3234-4914-b73f-9b6f57690074"
 		os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 
 		PINECONE_ENV = "eu-west1-gcp"
