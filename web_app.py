@@ -154,11 +154,11 @@ def clear_history():
 
 def main():
 		# Get OPENAI API key
-		OPENAI_API_KEY = "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"
+		OPENAI_API_KEY = ""
 		os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 		#Pinecone api_key
-		PINECONE_API_KEY = "8f50afcb-3234-4914-b73f-9b6f57690074"
+		PINECONE_API_KEY = ""
 		os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 
 		PINECONE_ENV = "eu-west1-gcp"
